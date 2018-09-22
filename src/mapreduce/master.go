@@ -32,25 +32,43 @@ func (mr *MapReduce) RunMaster() *list.List {
 	mr.Workers = myWorkers
 	totalMapJobs := mr.nMap
 	totalReduceJobs := mr.nReduce
-	for i := 0; i < 2; i++ {
-		worker := <-mr.registerChannel
-		mr.Workers[worker] = &WorkerInfo{worker}
-		for ; totalMapJobs > 0; totalMapJobs-- {
-			args := &DoJobArgs{File: mr.file, Operation: Map, JobNumber: mr.nMap - totalMapJobs, NumOtherPhase: mr.nReduce}
-			var reply DoJobReply
-			ok := call(worker, "Worker.DoJob", args, &reply)
-			if ok == false {
-				DPrintf("Something wrong with RPC===============\n")
+	done := false
+	for !done {
+		select {
+		case worker := <-mr.registerChannel:
+			mr.Workers[worker] = &WorkerInfo{worker}
+		default:
+			for worker, _ := range mr.Workers {
+				for ; totalMapJobs > 0; totalMapJobs-- {
+					args := &DoJobArgs{File: mr.file, Operation: Map, JobNumber: mr.nMap - totalMapJobs, NumOtherPhase: mr.nReduce}
+					var reply DoJobReply
+					ok := call(worker, "Worker.DoJob", args, &reply)
+					if ok == false {
+						//wait for a new worker to start or find idle workers
+						break
+					}
+
+				}
+
+				for ; totalReduceJobs > 0; totalReduceJobs-- {
+					args := &DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: mr.nReduce - totalReduceJobs, NumOtherPhase: mr.nMap}
+					var reply DoJobReply
+					ok := call(worker, "Worker.DoJob", args, &reply)
+					if ok == false {
+						//wait for a new worker to start or find idle workers
+						break
+					}
+
+				}
+
+				//exit the map reduce process if all the jobs are finished successfully
+				if totalMapJobs == 0 && totalReduceJobs == 0 {
+					done = true
+					break
+				}
 			}
-
-		}
-
-		for ; totalReduceJobs > 0; totalReduceJobs-- {
-			args := &DoJobArgs{File: mr.file, Operation: Reduce, JobNumber: mr.nReduce - totalReduceJobs, NumOtherPhase: mr.nMap}
-			var reply DoJobReply
-			ok := call(worker, "Worker.DoJob", args, &reply)
-			if ok == false {
-				DPrintf("Something wrong with RPC===============\n")
+			if done {
+				break
 			}
 
 		}
